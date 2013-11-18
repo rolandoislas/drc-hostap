@@ -846,6 +846,10 @@ ifdef CONFIG_TESTING_OPTIONS
 CFLAGS += -DCONFIG_TESTING_OPTIONS
 endif
 
+ifdef CONFIG_TENDONIN
+CFLAGS += -DCONFIG_TENDONIN
+endif
+
 ALL=hostapd hostapd_cli
 
 all: verify_config $(ALL)

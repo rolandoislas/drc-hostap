@@ -1479,8 +1479,14 @@ int wpas_wps_ssid_bss_match(struct wpa_supplicant *wpa_s,
 
 	if (eap_is_wps_pin_enrollee(&ssid->eap)) {
 		if (!wps_ie) {
-			wpa_printf(MSG_DEBUG, "   skip - non-WPS AP");
-			return 0;
+#ifdef CONFIG_TENDONIN
+			if (!(wps_ie = wpa_scan_get_vendor_ie_multi(bss, WPS_DEV_OUI_NIN))) {
+#else /* CONFIG_TENDONIN */
+			if (1) {
+#endif /* CONFIG_TENDONIN */
+				wpa_printf(MSG_DEBUG, "   skip - non-WPS AP");
+				return 0;
+			}
 		}
 
 		/*

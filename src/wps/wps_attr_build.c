@@ -287,6 +287,11 @@ int wps_build_auth_type_flags(struct wps_data *wps, struct wpabuf *msg)
 #ifdef CONFIG_WPS2
 	auth_types &= ~WPS_AUTH_SHARED;
 #endif /* CONFIG_WPS2 */
+
+#ifdef CONFIG_TENDONIN
+	auth_types &= ~(WPS_AUTH_WPA | WPS_AUTH_WPA2);
+#endif /* CONFIG_TENDONIN */
+
 	wpa_printf(MSG_DEBUG, "WPS:  * Authentication Type Flags");
 	wpabuf_put_be16(msg, ATTR_AUTH_TYPE_FLAGS);
 	wpabuf_put_be16(msg, 2);
