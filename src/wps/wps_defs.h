@@ -280,6 +280,7 @@ enum wps_assoc_state {
 
 
 #define WPS_DEV_OUI_WFA 0x0050f204
+#define WPS_DEV_OUI_NIN ((0x00a4c0e1 << 8) | 0xf4)
 
 enum wps_dev_categ {
 	WPS_DEV_COMPUTER = 1,

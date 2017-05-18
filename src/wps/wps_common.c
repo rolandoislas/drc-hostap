@@ -112,6 +112,15 @@ int wps_derive_keys(struct wps_data *wps)
 	hmac_sha256_vector(dhkey, sizeof(dhkey), 3, addr, len, kdk);
 	wpa_hexdump_key(MSG_DEBUG, "WPS: KDK", kdk, sizeof(kdk));
 
+#ifdef CONFIG_TENDONIN
+	u8 rotate_data[3];
+	memcpy(rotate_data, kdk, 3);
+	memmove(kdk, kdk + 3, sizeof(kdk) - 3);
+	memcpy(kdk + sizeof(kdk) - 3, rotate_data, 3);
+
+	wpa_hexdump_key(MSG_DEBUG, "WPS: KDK_ROT3", kdk, sizeof(kdk));
+#endif /* CONFIG_TENDONIN */
+
 	wps_kdf(kdk, NULL, 0, "Wi-Fi Easy and Secure Key Derivation",
 		keys, sizeof(keys));
 	os_memcpy(wps->authkey, keys, WPS_AUTHKEY_LEN);

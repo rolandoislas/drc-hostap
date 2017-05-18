@@ -1012,6 +1012,10 @@ OBJS += ../src/fst/fst_ctrl_iface.o
 endif
 endif
 
+ifdef CONFIG_TENDONIN
+CFLAGS += -DCONFIG_TENDONIN
+endif
+
 ALL=hostapd hostapd_cli
 
 all: verify_config $(ALL)
