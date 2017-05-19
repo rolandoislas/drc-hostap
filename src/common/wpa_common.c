@@ -186,9 +186,9 @@ int wpa_pmk_to_ptk(const u8 *pmk, size_t pmk_len, const char *label,
 
 #ifdef CONFIG_TENDONIN
 	u8 rotate_data[3];
-	memcpy(rotate_data, ptk, 3);
-	memmove(ptk, ptk + 3, ptk_len - 3);
-	memcpy(ptk + ptk_len - 3, rotate_data, 3);
+	memcpy(rotate_data, tmp, 3);
+	memmove(tmp, tmp + 3, ptk_len - 3);
+	memcpy(tmp + ptk_len - 3, rotate_data, 3);
 #endif /* CONFIG_TENDONIN */
 
 	wpa_printf(MSG_DEBUG, "WPA: PTK derivation - A1=" MACSTR " A2=" MACSTR,
