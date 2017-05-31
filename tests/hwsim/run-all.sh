@@ -24,49 +24,98 @@ else
     fi
 fi
 
-if [ "x$1" = "xconcurrent-valgrind" ]; then
-	VALGRIND=valgrind
-	CONCURRENT=concurrent
-	CONCURRENT_TESTS="-f p2p_autogo p2p_discovery p2p_grpform"
-	SUFFIX=-concurrent-valgrind
-	shift
-elif [ "x$1" = "xconcurrent" ]; then
-	CONCURRENT=concurrent
-	CONCURRENT_TESTS="-f p2p_autogo p2p_discovery p2p_grpform"
-	unset VALGRIND
-	SUFFIX=-concurrent
-	shift
-elif [ "x$1" = "xvalgrind" ]; then
-	VALGRIND=valgrind
-	unset CONCURRENT
-	unset CONCURRENT_TESTS
-	SUFFIX=-valgrind
-	shift
-else
-	unset VALGRIND
-	unset CONCURRENT
-	unset CONCURRENT_TESTS
-	SUFFIX=
+usage()
+{
+	echo "$0 [-v | --valgrind | valgrind] [-t | --trace | trace]"
+	echo "\t[-n <num> | --channels <num>] [-B | --build]"
+	echo "\t[-c | --codecov ] [run-tests.py parameters]"
+	exit 1
+}
+
+unset VALGRIND
+unset TRACE
+unset TRACE_ARGS
+unset RUN_TEST_ARGS
+unset BUILD
+unset BUILD_ARGS
+unset CODECOV
+while [ "$1" != "" ]; do
+	case $1 in
+		-v | --valgrind | valgrind)
+			shift
+			echo "$0: using valgrind"
+			VALGRIND=valgrind
+			;;
+		-t | --trace | trace)
+			shift
+			echo "$0: using Trace"
+			TRACE=trace
+			;;
+		-n | --channels)
+			shift
+			NUM_CH=$1
+			shift
+			echo "$0: using channels=$NUM_CH"
+			;;
+		-B | --build)
+			shift
+			echo "$0: build before running tests"
+			BUILD=build
+			;;
+		-c | --codecov)
+			shift
+			echo "$0: using code coverage"
+			CODECOV=lcov
+			BUILD_ARGS=-c
+			;;
+		-h | --help)
+			usage
+			;;
+		*)
+			RUN_TEST_ARGS="$RUN_TEST_ARGS$1 "
+			shift
+			;;
+	esac
+done
+
+if [ ! -z "$RUN_TEST_ARGS" ]; then
+	echo "$0: passing the following args to run-tests.py: $RUN_TEST_ARGS"
 fi
 
-if [ "x$1" = "xtrace" ] ; then
-	TRACE=trace
+unset SUFFIX
+if [ ! -z "$BUILD" ]; then
+	SUFFIX=-build
+fi
+
+if [ ! -z "$VALGRIND" ]; then
+	SUFFIX=$SUFFIX-valgrind
+fi
+
+if [ ! -z "$TRACE" ]; then
 	SUFFIX=$SUFFIX-trace
 	TRACE_ARGS="-T"
-	shift
-else
-	unset TRACE
-	unset TRACE_ARGS
 fi
 
-if ! ./start.sh $CONCURRENT $VALGRIND $TRACE; then
+if [ ! -z "$CODECOV" ]; then
+	SUFFIX=$SUFFIX-codecov
+fi
+
+if [ ! -z "$BUILD" ]; then
+    echo "Building with args=$BUILD_ARGS"
+    if ! ./build.sh $BUILD_ARGS; then
+	    echo "Failed building components"
+	    exit 1
+    fi
+fi
+
+if ! ./start.sh $VALGRIND $TRACE channels=$NUM_CH; then
 	if ! [ -z "$LOGBASEDIR" ] ; then
 		echo "Could not start test environment" > $LOGDIR/run
 	fi
 	exit 1
 fi
 
-./run-tests.py -D --logdir "$LOGDIR" $TRACE_ARGS -q $DB $CONCURRENT_TESTS $@ || errors=1
+sudo ./run-tests.py -D --logdir "$LOGDIR" $TRACE_ARGS -q $DB $RUN_TEST_ARGS || errors=1
 
 ./stop.sh
 
@@ -77,6 +126,14 @@ if [ ! -z "$VALGRIND" ] ; then
 	errors=1
     fi
 fi
+
+if [ ! -z "$CODECOV" ] ; then
+	lcov -q --capture --directory ../../wpa_supplicant --output-file $LOGDIR/wpas_lcov.info
+	genhtml -q $LOGDIR/wpas_lcov.info --output-directory $LOGDIR/wpas_lcov
+	lcov -q --capture --directory ../../hostapd --output-file $LOGDIR/hostapd_lcov.info
+	genhtml -q $LOGDIR/hostapd_lcov.info --output-directory $LOGDIR/hostapd_lcov
+fi
+
 if [ $errors -gt 0 ]; then
     tar czf /tmp/hwsim-tests-$DATE-FAILED$SUFFIX.tar.gz $LOGDIR/
     exit 1

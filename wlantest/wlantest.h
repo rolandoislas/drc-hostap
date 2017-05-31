@@ -61,6 +61,7 @@ struct wlantest_sta {
 	} state;
 	u16 aid;
 	u8 rsnie[257]; /* WPA/RSN IE */
+	u8 osenie[257]; /* OSEN IE */
 	int proto;
 	int pairwise_cipher;
 	int group_cipher;
@@ -69,6 +70,7 @@ struct wlantest_sta {
 	u8 anonce[32]; /* ANonce from the previous EAPOL-Key msg 1/4 or 3/4 */
 	u8 snonce[32]; /* SNonce from the previous EAPOL-Key msg 2/4 */
 	struct wpa_ptk ptk; /* Derived PTK */
+	size_t tk_len;
 	int ptk_set;
 	struct wpa_ptk tptk; /* Derived PTK during rekeying */
 	int tptk_set;
@@ -97,6 +99,9 @@ struct wlantest_sta {
 	u8 gtk[32];
 	size_t gtk_len;
 	int gtk_idx;
+
+	u32 tx_tid[16 + 1];
+	u32 rx_tid[16 + 1];
 };
 
 struct wlantest_tdls {
@@ -127,6 +132,7 @@ struct wlantest_bss {
 	int parse_error_reported;
 	u8 wpaie[257];
 	u8 rsnie[257];
+	u8 osenie[257];
 	int proto;
 	int pairwise_cipher;
 	int group_cipher;
@@ -139,12 +145,16 @@ struct wlantest_bss {
 	size_t gtk_len[4];
 	int gtk_idx;
 	u8 rsc[4][6];
-	u8 igtk[6][16];
-	int igtk_set[6];
+	u8 igtk[6][32];
+	size_t igtk_len[6];
 	int igtk_idx;
 	u8 ipn[6][6];
 	u32 counters[NUM_WLANTEST_BSS_COUNTER];
 	struct dl_list tdls; /* struct wlantest_tdls */
+	u8 mdid[2];
+	u8 r0kh_id[FT_R0KH_ID_MAX_LEN];
+	size_t r0kh_id_len;
+	u8 r1kh_id[FT_R1KH_ID_LEN];
 };
 
 struct wlantest_radius {
@@ -192,6 +202,7 @@ struct wlantest {
 	int last_mgmt_valid;
 
 	unsigned int assume_fcs:1;
+	unsigned int pcap_no_buffer:1;
 
 	char *notes[MAX_NOTES];
 	size_t num_notes;
@@ -263,6 +274,10 @@ u8 * ccmp_decrypt(const u8 *tk, const struct ieee80211_hdr *hdr,
 		  const u8 *data, size_t data_len, size_t *decrypted_len);
 u8 * ccmp_encrypt(const u8 *tk, u8 *frame, size_t len, size_t hdrlen, u8 *qos,
 		  u8 *pn, int keyid, size_t *encrypted_len);
+u8 * ccmp_encrypt_pv1(const u8 *tk, const u8 *a1, const u8 *a2, const u8 *a3,
+		      const u8 *frame, size_t len,
+		      size_t hdrlen, const u8 *pn, int keyid,
+		      size_t *encrypted_len);
 void ccmp_get_pn(u8 *pn, const u8 *data);
 u8 * ccmp_256_decrypt(const u8 *tk, const struct ieee80211_hdr *hdr,
 		      const u8 *data, size_t data_len, size_t *decrypted_len);
@@ -278,16 +293,16 @@ void tkip_get_pn(u8 *pn, const u8 *data);
 u8 * wep_decrypt(struct wlantest *wt, const struct ieee80211_hdr *hdr,
 		 const u8 *data, size_t data_len, size_t *decrypted_len);
 
-u8 * bip_protect(const u8 *igtk, u8 *frame, size_t len, u8 *ipn, int keyid,
-		 size_t *prot_len);
+u8 * bip_protect(const u8 *igtk, size_t igtk_len, u8 *frame, size_t len,
+		 u8 *ipn, int keyid, size_t *prot_len);
 u8 * bip_gmac_protect(const u8 *igtk, size_t igtk_len, u8 *frame, size_t len,
 		      u8 *ipn, int keyid, size_t *prot_len);
 
 u8 * gcmp_decrypt(const u8 *tk, size_t tk_len, const struct ieee80211_hdr *hdr,
 		  const u8 *data, size_t data_len, size_t *decrypted_len);
-u8 * gcmp_encrypt(const u8 *tk, size_t tk_len, u8 *frame, size_t len,
-		  size_t hdrlen, u8 *qos,
-		  u8 *pn, int keyid, size_t *encrypted_len);
+u8 * gcmp_encrypt(const u8 *tk, size_t tk_len, const u8 *frame, size_t len,
+		  size_t hdrlen, const u8 *qos,
+		  const u8 *pn, int keyid, size_t *encrypted_len);
 
 int ctrl_init(struct wlantest *wt);
 void ctrl_deinit(struct wlantest *wt);

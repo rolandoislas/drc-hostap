@@ -72,7 +72,7 @@ static int supp_ether_send(void *ctx, const u8 *dest, u16 proto, const u8 *buf,
 	if (wpa_s->l2)
 		return l2_packet_send(wpa_s->l2, dest, proto, buf, len);
 
-	return wpa_drv_send_eapol(wpa_s, dest, proto, buf, len);
+	return -1;
 }
 
 
@@ -221,6 +221,7 @@ static int ibss_rsn_supp_init(struct ibss_rsn_peer *peer, const u8 *own_addr,
 	peer->supp = wpa_sm_init(ctx);
 	if (peer->supp == NULL) {
 		wpa_printf(MSG_DEBUG, "SUPP: wpa_sm_init() failed");
+		os_free(ctx);
 		return -1;
 	}
 
@@ -230,7 +231,7 @@ static int ibss_rsn_supp_init(struct ibss_rsn_peer *peer, const u8 *own_addr,
 	wpa_sm_set_param(peer->supp, WPA_PARAM_PAIRWISE, WPA_CIPHER_CCMP);
 	wpa_sm_set_param(peer->supp, WPA_PARAM_GROUP, WPA_CIPHER_CCMP);
 	wpa_sm_set_param(peer->supp, WPA_PARAM_KEY_MGMT, WPA_KEY_MGMT_PSK);
-	wpa_sm_set_pmk(peer->supp, psk, PMK_LEN);
+	wpa_sm_set_pmk(peer->supp, psk, PMK_LEN, NULL, NULL);
 
 	peer->supp_ie_len = sizeof(peer->supp_ie);
 	if (wpa_sm_set_assoc_wpa_ie_default(peer->supp, peer->supp_ie,
@@ -283,7 +284,7 @@ static int auth_send_eapol(void *ctx, const u8 *addr, const u8 *data,
 		return l2_packet_send(wpa_s->l2, addr, ETH_P_EAPOL, data,
 				      data_len);
 
-	return wpa_drv_send_eapol(wpa_s, addr, ETH_P_EAPOL, data, data_len);
+	return -1;
 }
 
 
@@ -404,7 +405,7 @@ static void auth_set_eapol(void *ctx, const u8 *addr,
 
 
 static int ibss_rsn_auth_init_group(struct ibss_rsn *ibss_rsn,
-				    const u8 *own_addr)
+				    const u8 *own_addr, struct wpa_ssid *ssid)
 {
 	struct wpa_auth_config conf;
 	struct wpa_auth_callbacks cb;
@@ -418,7 +419,7 @@ static int ibss_rsn_auth_init_group(struct ibss_rsn *ibss_rsn,
 	conf.rsn_pairwise = WPA_CIPHER_CCMP;
 	conf.wpa_group = WPA_CIPHER_CCMP;
 	conf.eapol_version = 2;
-	conf.wpa_group_rekey = 600;
+	conf.wpa_group_rekey = ssid->group_rekey ? ssid->group_rekey : 600;
 
 	os_memset(&cb, 0, sizeof(cb));
 	cb.ctx = ibss_rsn;
@@ -571,6 +572,9 @@ int ibss_rsn_start(struct ibss_rsn *ibss_rsn, const u8 *addr)
 	struct ibss_rsn_peer *peer;
 	int res;
 
+	if (!ibss_rsn)
+		return -1;
+
 	/* if the peer already exists, exit immediately */
 	peer = ibss_rsn_get_peer(ibss_rsn, addr);
 	if (peer)
@@ -590,7 +594,7 @@ int ibss_rsn_start(struct ibss_rsn *ibss_rsn, const u8 *addr)
 		peer->authentication_status |= IBSS_RSN_AUTH_BY_US;
 		return ibss_rsn_auth_init(ibss_rsn, peer);
 	} else {
-		os_get_time(&peer->own_auth_tx);
+		os_get_reltime(&peer->own_auth_tx);
 		eloop_register_timeout(1, 0, ibss_rsn_auth_timeout, peer, NULL);
 	}
 
@@ -662,7 +666,8 @@ void ibss_rsn_stop(struct ibss_rsn *ibss_rsn, const u8 *peermac)
 }
 
 
-struct ibss_rsn * ibss_rsn_init(struct wpa_supplicant *wpa_s)
+struct ibss_rsn * ibss_rsn_init(struct wpa_supplicant *wpa_s,
+				struct wpa_ssid *ssid)
 {
 	struct ibss_rsn *ibss_rsn;
 
@@ -671,7 +676,7 @@ struct ibss_rsn * ibss_rsn_init(struct wpa_supplicant *wpa_s)
 		return NULL;
 	ibss_rsn->wpa_s = wpa_s;
 
-	if (ibss_rsn_auth_init_group(ibss_rsn, wpa_s->own_addr) < 0) {
+	if (ibss_rsn_auth_init_group(ibss_rsn, wpa_s->own_addr, ssid) < 0) {
 		ibss_rsn_deinit(ibss_rsn);
 		return NULL;
 	}
@@ -694,7 +699,8 @@ void ibss_rsn_deinit(struct ibss_rsn *ibss_rsn)
 		ibss_rsn_free(prev);
 	}
 
-	wpa_deinit(ibss_rsn->auth_group);
+	if (ibss_rsn->auth_group)
+		wpa_deinit(ibss_rsn->auth_group);
 	os_free(ibss_rsn);
 
 }
@@ -834,9 +840,9 @@ static void ibss_rsn_handle_auth_1_of_2(struct ibss_rsn *ibss_rsn,
 	if (peer &&
 	    peer->authentication_status & IBSS_RSN_AUTH_EAPOL_BY_PEER) {
 		if (peer->own_auth_tx.sec) {
-			struct os_time now, diff;
-			os_get_time(&now);
-			os_time_sub(&now, &peer->own_auth_tx, &diff);
+			struct os_reltime now, diff;
+			os_get_reltime(&now);
+			os_reltime_sub(&now, &peer->own_auth_tx, &diff);
 			if (diff.sec == 0 && diff.usec < 500000) {
 				wpa_printf(MSG_DEBUG, "RSN: Skip IBSS reinit since only %u usec from own Auth frame TX",
 					   (int) diff.usec);

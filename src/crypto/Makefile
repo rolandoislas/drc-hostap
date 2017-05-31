@@ -1,7 +1,7 @@
 all: libcrypto.a
 
 clean:
-	rm -f *~ *.o *.d libcrypto.a
+	rm -f *~ *.o *.d *.gcno *.gcda *.gcov libcrypto.a
 
 install:
 	@echo Nothing to be made.
@@ -9,6 +9,7 @@ install:
 
 include ../lib.rules
 
+CFLAGS += -DCONFIG_CRYPTO_INTERNAL
 CFLAGS += -DCONFIG_TLS_INTERNAL_CLIENT
 CFLAGS += -DCONFIG_TLS_INTERNAL_SERVER
 #CFLAGS += -DALL_DH_GROUPS
@@ -25,6 +26,7 @@ LIB_OBJS= \
 	aes-internal-dec.o \
 	aes-internal-enc.o \
 	aes-omac1.o \
+	aes-siv.o \
 	aes-unwrap.o \
 	aes-wrap.o \
 	des-internal.o \
@@ -45,7 +47,9 @@ LIB_OBJS= \
 	sha256.o \
 	sha256-prf.o \
 	sha256-tlsprf.o \
-	sha256-internal.o
+	sha256-internal.o \
+	sha384-internal.o \
+	sha512-internal.o
 
 LIB_OBJS += crypto_internal.o
 LIB_OBJS += crypto_internal-cipher.o

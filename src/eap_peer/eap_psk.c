@@ -76,7 +76,7 @@ static void eap_psk_deinit(struct eap_sm *sm, void *priv)
 	struct eap_psk_data *data = priv;
 	os_free(data->id_s);
 	os_free(data->id_p);
-	os_free(data);
+	bin_clear_free(data, sizeof(*data));
 }
 
 
@@ -237,7 +237,7 @@ static struct wpabuf * eap_psk_process_3(struct eap_psk_data *data,
 		return NULL;
 	}
 	os_free(buf);
-	if (os_memcmp(mac, hdr3->mac_s, EAP_PSK_MAC_LEN) != 0) {
+	if (os_memcmp_const(mac, hdr3->mac_s, EAP_PSK_MAC_LEN) != 0) {
 		wpa_printf(MSG_WARNING, "EAP-PSK: Invalid MAC_S in third "
 			   "message");
 		ret->methodState = METHOD_DONE;
@@ -480,7 +480,6 @@ static u8 * eap_psk_get_emsk(struct eap_sm *sm, void *priv, size_t *len)
 int eap_peer_psk_register(void)
 {
 	struct eap_method *eap;
-	int ret;
 
 	eap = eap_peer_method_alloc(EAP_PEER_METHOD_INTERFACE_VERSION,
 				    EAP_VENDOR_IETF, EAP_TYPE_PSK, "PSK");
@@ -495,8 +494,5 @@ int eap_peer_psk_register(void)
 	eap->getSessionId = eap_psk_get_session_id;
 	eap->get_emsk = eap_psk_get_emsk;
 
-	ret = eap_peer_method_register(eap);
-	if (ret)
-		eap_peer_method_free(eap);
-	return ret;
+	return eap_peer_method_register(eap);
 }

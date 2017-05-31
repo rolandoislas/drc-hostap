@@ -1,6 +1,6 @@
 /*
  * wlantest - IEEE 802.11 protocol monitoring and testing tool
- * Copyright (c) 2010-2013, Jouni Malinen <j@w1.fi>
+ * Copyright (c) 2010-2015, Jouni Malinen <j@w1.fi>
  *
  * This software may be distributed under the terms of the BSD license.
  * See README for more details.
@@ -13,11 +13,6 @@
 #include "wlantest.h"
 
 
-extern int wpa_debug_level;
-extern int wpa_debug_show_keys;
-extern int wpa_debug_timestamp;
-
-
 static void wlantest_terminate(int sig, void *signal_ctx)
 {
 	eloop_terminate();
@@ -26,7 +21,7 @@ static void wlantest_terminate(int sig, void *signal_ctx)
 
 static void usage(void)
 {
-	printf("wlantest [-cddhqqFt] [-i<ifname>] [-r<pcap file>] "
+	printf("wlantest [-cddhqqFNt] [-i<ifname>] [-r<pcap file>] "
 	       "[-p<passphrase>]\n"
 	       "         [-I<wired ifname>] [-R<wired pcap file>] "
 	       "[-P<RADIUS shared secret>]\n"
@@ -215,10 +210,16 @@ static int add_ptk_file(struct wlantest *wt, const char *ptk_file)
 		if (p == NULL)
 			break;
 		if (ptk_len < 48) {
-			os_memcpy(p->ptk.tk1, ptk, ptk_len);
+			os_memcpy(p->ptk.tk, ptk, ptk_len);
+			p->ptk.tk_len = ptk_len;
 			p->ptk_len = 32 + ptk_len;
 		} else {
-			os_memcpy(&p->ptk, ptk, ptk_len);
+			os_memcpy(p->ptk.kck, ptk, 16);
+			p->ptk.kck_len = 16;
+			os_memcpy(p->ptk.kek, ptk + 16, 16);
+			p->ptk.kek_len = 16;
+			os_memcpy(p->ptk.tk, ptk + 32, ptk_len - 32);
+			p->ptk.tk_len = ptk_len - 32;
 			p->ptk_len = ptk_len;
 		}
 		dl_list_add(&wt->ptk, &p->list);
@@ -349,7 +350,7 @@ int main(int argc, char *argv[])
 	wlantest_init(&wt);
 
 	for (;;) {
-		c = getopt(argc, argv, "cdf:Fhi:I:L:n:p:P:qr:R:tT:w:W:");
+		c = getopt(argc, argv, "cdf:Fhi:I:L:n:Np:P:qr:R:tT:w:W:");
 		if (c < 0)
 			break;
 		switch (c) {
@@ -381,6 +382,9 @@ int main(int argc, char *argv[])
 			break;
 		case 'n':
 			wt.pcapng_file = optarg;
+			break;
+		case 'N':
+			wt.pcap_no_buffer = 1;
 			break;
 		case 'p':
 			add_passphrase(&wt, optarg);

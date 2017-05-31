@@ -80,6 +80,28 @@ int sha256_vector(size_t num_elem, const u8 *addr[], const size_t *len,
 		  u8 *mac);
 
 /**
+ * sha384_vector - SHA384 hash for data vector
+ * @num_elem: Number of elements in the data vector
+ * @addr: Pointers to the data areas
+ * @len: Lengths of the data blocks
+ * @mac: Buffer for the hash
+ * Returns: 0 on success, -1 on failure
+ */
+int sha384_vector(size_t num_elem, const u8 *addr[], const size_t *len,
+		  u8 *mac);
+
+/**
+ * sha512_vector - SHA512 hash for data vector
+ * @num_elem: Number of elements in the data vector
+ * @addr: Pointers to the data areas
+ * @len: Lengths of the data blocks
+ * @mac: Buffer for the hash
+ * Returns: 0 on success, -1 on failure
+ */
+int sha512_vector(size_t num_elem, const u8 *addr[], const size_t *len,
+		  u8 *mac);
+
+/**
  * des_encrypt - Encrypt one block with DES
  * @clear: 8 octets (in)
  * @key: 7 octets (in) (no parity bits included)
@@ -135,7 +157,8 @@ void aes_decrypt_deinit(void *ctx);
 enum crypto_hash_alg {
 	CRYPTO_HASH_ALG_MD5, CRYPTO_HASH_ALG_SHA1,
 	CRYPTO_HASH_ALG_HMAC_MD5, CRYPTO_HASH_ALG_HMAC_SHA1,
-	CRYPTO_HASH_ALG_SHA256, CRYPTO_HASH_ALG_HMAC_SHA256
+	CRYPTO_HASH_ALG_SHA256, CRYPTO_HASH_ALG_HMAC_SHA256,
+	CRYPTO_HASH_ALG_SHA384, CRYPTO_HASH_ALG_SHA512
 };
 
 struct crypto_hash;
@@ -270,6 +293,10 @@ struct crypto_private_key;
  * to implement this.
  */
 struct crypto_public_key * crypto_public_key_import(const u8 *key, size_t len);
+
+struct crypto_public_key *
+crypto_public_key_import_parts(const u8 *n, size_t n_len,
+			       const u8 *e, size_t e_len);
 
 /**
  * crypto_private_key_import - Import an RSA private key
@@ -534,16 +561,6 @@ int crypto_bignum_exptmod(const struct crypto_bignum *a,
 			  struct crypto_bignum *d);
 
 /**
- * crypto_bignum_rshift - b = a >> n
- * @a: Bignum
- * @n: Number of bits to shift
- * @b: Bignum; used to store the result of a >> n
- * Returns: 0 on success, -1 on failure
- */
-int crypto_bignum_rshift(const struct crypto_bignum *a, int n,
-			 struct crypto_bignum *b);
-
-/**
  * crypto_bignum_inverse - Inverse a bignum so that a * c = 1 (mod b)
  * @a: Bignum
  * @b: Bignum
@@ -618,6 +635,15 @@ int crypto_bignum_is_zero(const struct crypto_bignum *a);
  * Returns: 1 if @a is one or 0 if not
  */
 int crypto_bignum_is_one(const struct crypto_bignum *a);
+
+/**
+ * crypto_bignum_legendre - Compute the Legendre symbol (a/p)
+ * @a: Bignum
+ * @p: Bignum
+ * Returns: Legendre symbol -1,0,1 on success; -2 on calculation failure
+ */
+int crypto_bignum_legendre(const struct crypto_bignum *a,
+			   const struct crypto_bignum *p);
 
 /**
  * struct crypto_ec - Elliptic curve context
@@ -764,6 +790,16 @@ int crypto_ec_point_solve_y_coord(struct crypto_ec *e,
 				  const struct crypto_bignum *x, int y_bit);
 
 /**
+ * crypto_ec_point_compute_y_sqr - Compute y^2 = x^3 + ax + b
+ * @e: EC context from crypto_ec_init()
+ * @x: x coordinate
+ * Returns: y^2 on success, %NULL failure
+ */
+struct crypto_bignum *
+crypto_ec_point_compute_y_sqr(struct crypto_ec *e,
+			      const struct crypto_bignum *x);
+
+/**
  * crypto_ec_point_is_at_infinity - Check whether EC point is neutral element
  * @e: EC context from crypto_ec_init()
  * @p: EC point
@@ -781,5 +817,16 @@ int crypto_ec_point_is_at_infinity(struct crypto_ec *e,
  */
 int crypto_ec_point_is_on_curve(struct crypto_ec *e,
 				const struct crypto_ec_point *p);
+
+/**
+ * crypto_ec_point_cmp - Compare two EC points
+ * @e: EC context from crypto_ec_init()
+ * @a: EC point
+ * @b: EC point
+ * Returns: 0 on equal, non-zero otherwise
+ */
+int crypto_ec_point_cmp(const struct crypto_ec *e,
+			const struct crypto_ec_point *a,
+			const struct crypto_ec_point *b);
 
 #endif /* CRYPTO_H */

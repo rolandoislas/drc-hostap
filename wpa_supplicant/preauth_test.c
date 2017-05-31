@@ -27,10 +27,7 @@
 #include "drivers/driver.h"
 
 
-extern int wpa_debug_level;
-extern int wpa_debug_show_keys;
-
-struct wpa_driver_ops *wpa_drivers[] = { NULL };
+const struct wpa_driver_ops *const wpa_drivers[] = { NULL };
 
 
 struct preauth_test_data {

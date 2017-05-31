@@ -14,7 +14,6 @@
 #include "utils/eloop.h"
 #include "common/ieee802_11_defs.h"
 #include "common/ieee802_11_common.h"
-#include "drivers/driver.h"
 #include "hostapd.h"
 #include "ap_config.h"
 #include "ieee802_11.h"
@@ -33,7 +32,8 @@ static int ap_list_beacon_olbc(struct hostapd_iface *iface, struct ap_info *ap)
 {
 	int i;
 
-	if (iface->current_mode->mode != HOSTAPD_MODE_IEEE80211G ||
+	if (iface->current_mode == NULL ||
+	    iface->current_mode->mode != HOSTAPD_MODE_IEEE80211G ||
 	    iface->conf->channel != ap->channel)
 		return 0;
 
@@ -111,8 +111,8 @@ static void ap_ap_hash_del(struct hostapd_iface *iface, struct ap_info *ap)
 	if (s->hnext != NULL)
 		s->hnext = s->hnext->hnext;
 	else
-		printf("AP: could not remove AP " MACSTR " from hash table\n",
-		       MAC2STR(ap->addr));
+		wpa_printf(MSG_INFO, "AP: could not remove AP " MACSTR
+			   " from hash table",  MAC2STR(ap->addr));
 }
 
 
@@ -172,7 +172,6 @@ void ap_list_process_beacon(struct hostapd_iface *iface,
 			    struct hostapd_frame_info *fi)
 {
 	struct ap_info *ap;
-	struct os_time now;
 	int new_ap = 0;
 	int set_beacon = 0;
 
@@ -183,7 +182,8 @@ void ap_list_process_beacon(struct hostapd_iface *iface,
 	if (!ap) {
 		ap = ap_ap_add(iface, mgmt->bssid);
 		if (!ap) {
-			printf("Failed to allocate AP information entry\n");
+			wpa_printf(MSG_INFO,
+				   "Failed to allocate AP information entry");
 			return;
 		}
 		new_ap = 1;
@@ -193,14 +193,14 @@ void ap_list_process_beacon(struct hostapd_iface *iface,
 			  elems->supp_rates, elems->supp_rates_len,
 			  elems->ext_supp_rates, elems->ext_supp_rates_len);
 
-	if (elems->erp_info && elems->erp_info_len == 1)
+	if (elems->erp_info)
 		ap->erp = elems->erp_info[0];
 	else
 		ap->erp = -1;
 
-	if (elems->ds_params && elems->ds_params_len == 1)
+	if (elems->ds_params)
 		ap->channel = elems->ds_params[0];
-	else if (elems->ht_operation && elems->ht_operation_len >= 1)
+	else if (elems->ht_operation)
 		ap->channel = elems->ht_operation[0];
 	else if (fi)
 		ap->channel = fi->channel;
@@ -210,8 +210,7 @@ void ap_list_process_beacon(struct hostapd_iface *iface,
 	else
 		ap->ht_support = 0;
 
-	os_get_time(&now);
-	ap->last_beacon = now.sec;
+	os_get_reltime(&ap->last_beacon);
 
 	if (!new_ap && ap != iface->ap_list) {
 		/* move AP entry into the beginning of the list so that the
@@ -249,24 +248,21 @@ void ap_list_process_beacon(struct hostapd_iface *iface,
 }
 
 
-static void ap_list_timer(void *eloop_ctx, void *timeout_ctx)
+void ap_list_timer(struct hostapd_iface *iface)
 {
-	struct hostapd_iface *iface = eloop_ctx;
-	struct os_time now;
+	struct os_reltime now;
 	struct ap_info *ap;
 	int set_beacon = 0;
-
-	eloop_register_timeout(10, 0, ap_list_timer, iface, NULL);
 
 	if (!iface->ap_list)
 		return;
 
-	os_get_time(&now);
+	os_get_reltime(&now);
 
 	while (iface->ap_list) {
 		ap = iface->ap_list->prev;
-		if (ap->last_beacon + iface->conf->ap_table_expiration_time >=
-		    now.sec)
+		if (!os_reltime_expired(&now, &ap->last_beacon,
+					iface->conf->ap_table_expiration_time))
 			break;
 
 		ap_free_ap(iface, ap);
@@ -306,13 +302,11 @@ static void ap_list_timer(void *eloop_ctx, void *timeout_ctx)
 
 int ap_list_init(struct hostapd_iface *iface)
 {
-	eloop_register_timeout(10, 0, ap_list_timer, iface, NULL);
 	return 0;
 }
 
 
 void ap_list_deinit(struct hostapd_iface *iface)
 {
-	eloop_cancel_timeout(ap_list_timer, iface, NULL);
 	hostapd_free_aps(iface);
 }
