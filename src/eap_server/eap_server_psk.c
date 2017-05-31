@@ -47,7 +47,7 @@ static void eap_psk_reset(struct eap_sm *sm, void *priv)
 {
 	struct eap_psk_data *data = priv;
 	os_free(data->id_p);
-	os_free(data);
+	bin_clear_free(data, sizeof(*data));
 }
 
 
@@ -314,7 +314,7 @@ static void eap_psk_process_2(struct eap_sm *sm,
 	}
 	os_free(buf);
 	wpa_hexdump(MSG_DEBUG, "EAP-PSK: MAC_P", resp->mac_p, EAP_PSK_MAC_LEN);
-	if (os_memcmp(mac, resp->mac_p, EAP_PSK_MAC_LEN) != 0) {
+	if (os_memcmp_const(mac, resp->mac_p, EAP_PSK_MAC_LEN) != 0) {
 		wpa_printf(MSG_INFO, "EAP-PSK: Invalid MAC_P");
 		wpa_hexdump(MSG_MSGDUMP, "EAP-PSK: Expected MAC_P",
 			    mac, EAP_PSK_MAC_LEN);
@@ -485,10 +485,31 @@ static Boolean eap_psk_isSuccess(struct eap_sm *sm, void *priv)
 }
 
 
+static u8 * eap_psk_get_session_id(struct eap_sm *sm, void *priv, size_t *len)
+{
+	struct eap_psk_data *data = priv;
+	u8 *id;
+
+	if (data->state != SUCCESS)
+		return NULL;
+
+	*len = 1 + 2 * EAP_PSK_RAND_LEN;
+	id = os_malloc(*len);
+	if (id == NULL)
+		return NULL;
+
+	id[0] = EAP_TYPE_PSK;
+	os_memcpy(id + 1, data->rand_p, EAP_PSK_RAND_LEN);
+	os_memcpy(id + 1 + EAP_PSK_RAND_LEN, data->rand_s, EAP_PSK_RAND_LEN);
+	wpa_hexdump(MSG_DEBUG, "EAP-PSK: Derived Session-Id", id, *len);
+
+	return id;
+}
+
+
 int eap_server_psk_register(void)
 {
 	struct eap_method *eap;
-	int ret;
 
 	eap = eap_server_method_alloc(EAP_SERVER_METHOD_INTERFACE_VERSION,
 				      EAP_VENDOR_IETF, EAP_TYPE_PSK, "PSK");
@@ -504,9 +525,7 @@ int eap_server_psk_register(void)
 	eap->getKey = eap_psk_getKey;
 	eap->isSuccess = eap_psk_isSuccess;
 	eap->get_emsk = eap_psk_get_emsk;
+	eap->getSessionId = eap_psk_get_session_id;
 
-	ret = eap_server_method_register(eap);
-	if (ret)
-		eap_server_method_free(eap);
-	return ret;
+	return eap_server_method_register(eap);
 }

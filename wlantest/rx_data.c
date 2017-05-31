@@ -1,20 +1,17 @@
 /*
  * Received Data frame processing
- * Copyright (c) 2010, Jouni Malinen <j@w1.fi>
+ * Copyright (c) 2010-2015, Jouni Malinen <j@w1.fi>
  *
  * This software may be distributed under the terms of the BSD license.
  * See README for more details.
  */
 
 #include "utils/includes.h"
-#include <linux/if_ether.h>
 
 #include "utils/common.h"
 #include "common/defs.h"
 #include "common/ieee802_11_defs.h"
 #include "wlantest.h"
-
-extern int wpa_debug_level;
 
 
 static const char * data_stype(u16 stype)
@@ -105,15 +102,25 @@ static u8 * try_all_ptk(struct wlantest *wt, int pairwise_cipher,
 
 	wpa_debug_level = MSG_WARNING;
 	dl_list_for_each(ptk, &wt->ptk, struct wlantest_ptk, list) {
+		unsigned int tk_len = ptk->ptk_len - 32;
 		decrypted = NULL;
 		if ((pairwise_cipher == WPA_CIPHER_CCMP ||
-		     pairwise_cipher == 0) && ptk->ptk_len == 48) {
-			decrypted = ccmp_decrypt(ptk->ptk.tk1, hdr, data,
+		     pairwise_cipher == 0) && tk_len == 16) {
+			decrypted = ccmp_decrypt(ptk->ptk.tk, hdr, data,
 						 data_len, decrypted_len);
-		}
-		if ((pairwise_cipher == WPA_CIPHER_TKIP ||
-		     pairwise_cipher == 0) && ptk->ptk_len == 64) {
-			decrypted = tkip_decrypt(ptk->ptk.tk1, hdr, data,
+		} else if ((pairwise_cipher == WPA_CIPHER_CCMP_256 ||
+			    pairwise_cipher == 0) && tk_len == 32) {
+			decrypted = ccmp_256_decrypt(ptk->ptk.tk, hdr, data,
+						     data_len, decrypted_len);
+		} else if ((pairwise_cipher == WPA_CIPHER_GCMP ||
+			    pairwise_cipher == WPA_CIPHER_GCMP_256 ||
+			    pairwise_cipher == 0) &&
+			   (tk_len == 16 || tk_len == 32)) {
+			decrypted = gcmp_decrypt(ptk->ptk.tk, tk_len, hdr,
+						 data, data_len, decrypted_len);
+		} else if ((pairwise_cipher == WPA_CIPHER_TKIP ||
+			    pairwise_cipher == 0) && tk_len == 32) {
+			decrypted = tkip_decrypt(ptk->ptk.tk, hdr, data,
 						 data_len, decrypted_len);
 		}
 		if (decrypted) {
@@ -135,7 +142,7 @@ static void rx_data_bss_prot_group(struct wlantest *wt,
 {
 	struct wlantest_bss *bss;
 	int keyid;
-	u8 *decrypted;
+	u8 *decrypted = NULL;
 	size_t dlen;
 	u8 pn[6];
 
@@ -194,11 +201,13 @@ static void rx_data_bss_prot_group(struct wlantest *wt,
 	if (os_memcmp(pn, bss->rsc[keyid], 6) <= 0) {
 		u16 seq_ctrl = le_to_host16(hdr->seq_ctrl);
 		add_note(wt, MSG_INFO, "CCMP/TKIP replay detected: A1=" MACSTR
-			 " A2=" MACSTR " A3=" MACSTR " seq=%u frag=%u",
+			 " A2=" MACSTR " A3=" MACSTR " seq=%u frag=%u%s",
 			 MAC2STR(hdr->addr1), MAC2STR(hdr->addr2),
 			 MAC2STR(hdr->addr3),
 			 WLAN_GET_SEQ_SEQ(seq_ctrl),
-			 WLAN_GET_SEQ_FRAG(seq_ctrl));
+			 WLAN_GET_SEQ_FRAG(seq_ctrl),
+			 (le_to_host16(hdr->frame_control) & WLAN_FC_RETRY) ?
+			 " Retry" : "");
 		wpa_hexdump(MSG_INFO, "RX PN", pn, 6);
 		wpa_hexdump(MSG_INFO, "RSC", bss->rsc[keyid], 6);
 	}
@@ -209,9 +218,17 @@ skip_replay_det:
 					 &dlen);
 	else if (bss->group_cipher == WPA_CIPHER_WEP40)
 		decrypted = wep_decrypt(wt, hdr, data, len, &dlen);
-	else
+	else if (bss->group_cipher == WPA_CIPHER_CCMP)
 		decrypted = ccmp_decrypt(bss->gtk[keyid], hdr, data, len,
 					 &dlen);
+	else if (bss->group_cipher == WPA_CIPHER_CCMP_256)
+		decrypted = ccmp_256_decrypt(bss->gtk[keyid], hdr, data, len,
+					     &dlen);
+	else if (bss->group_cipher == WPA_CIPHER_GCMP ||
+		 bss->group_cipher == WPA_CIPHER_GCMP_256)
+		decrypted = gcmp_decrypt(bss->gtk[keyid], bss->gtk_len[keyid],
+					 hdr, data, len, &dlen);
+
 	if (decrypted) {
 		rx_data_process(wt, bss->bssid, NULL, dst, src, decrypted,
 				dlen, 1, NULL);
@@ -300,6 +317,8 @@ static void rx_data_bss_prot(struct wlantest *wt,
 		return;
 	}
 
+	if (sta == NULL)
+		return;
 	if (sta->pairwise_cipher & (WPA_CIPHER_TKIP | WPA_CIPHER_CCMP) &&
 	    !(data[3] & 0x20)) {
 		add_note(wt, MSG_INFO, "Expected TKIP/CCMP frame from "
@@ -336,10 +355,19 @@ static void rx_data_bss_prot(struct wlantest *wt,
 			 keyid, MAC2STR(hdr->addr2));
 	}
 
-	if (qos)
+	if (qos) {
 		tid = qos[0] & 0x0f;
-	else
+		if (fc & WLAN_FC_TODS)
+			sta->tx_tid[tid]++;
+		else
+			sta->rx_tid[tid]++;
+	} else {
 		tid = 0;
+		if (fc & WLAN_FC_TODS)
+			sta->tx_tid[16]++;
+		else
+			sta->rx_tid[16]++;
+	}
 	if (tk) {
 		if (os_memcmp(hdr->addr2, tdls->init->addr, ETH_ALEN) == 0)
 			rsc = tdls->rsc_init[tid];
@@ -360,25 +388,43 @@ static void rx_data_bss_prot(struct wlantest *wt,
 	if (os_memcmp(pn, rsc, 6) <= 0) {
 		u16 seq_ctrl = le_to_host16(hdr->seq_ctrl);
 		add_note(wt, MSG_INFO, "CCMP/TKIP replay detected: A1=" MACSTR
-			 " A2=" MACSTR " A3=" MACSTR " seq=%u frag=%u",
+			 " A2=" MACSTR " A3=" MACSTR " seq=%u frag=%u%s",
 			 MAC2STR(hdr->addr1), MAC2STR(hdr->addr2),
 			 MAC2STR(hdr->addr3),
 			 WLAN_GET_SEQ_SEQ(seq_ctrl),
-			 WLAN_GET_SEQ_FRAG(seq_ctrl));
+			 WLAN_GET_SEQ_FRAG(seq_ctrl),
+			 (le_to_host16(hdr->frame_control) &  WLAN_FC_RETRY) ?
+			 " Retry" : "");
 		wpa_hexdump(MSG_INFO, "RX PN", pn, 6);
 		wpa_hexdump(MSG_INFO, "RSC", rsc, 6);
 	}
 
 skip_replay_det:
-	if (tk)
-		decrypted = ccmp_decrypt(tk, hdr, data, len, &dlen);
-	else if (sta->pairwise_cipher == WPA_CIPHER_TKIP)
-		decrypted = tkip_decrypt(sta->ptk.tk1, hdr, data, len, &dlen);
-	else if (sta->pairwise_cipher == WPA_CIPHER_WEP40)
+	if (tk) {
+		if (sta->pairwise_cipher == WPA_CIPHER_CCMP_256)
+			decrypted = ccmp_256_decrypt(tk, hdr, data, len, &dlen);
+		else if (sta->pairwise_cipher == WPA_CIPHER_GCMP ||
+			 sta->pairwise_cipher == WPA_CIPHER_GCMP_256)
+			decrypted = gcmp_decrypt(tk, sta->tk_len, hdr, data,
+						 len, &dlen);
+		else
+			decrypted = ccmp_decrypt(tk, hdr, data, len, &dlen);
+	} else if (sta->pairwise_cipher == WPA_CIPHER_TKIP) {
+		decrypted = tkip_decrypt(sta->ptk.tk, hdr, data, len, &dlen);
+	} else if (sta->pairwise_cipher == WPA_CIPHER_WEP40) {
 		decrypted = wep_decrypt(wt, hdr, data, len, &dlen);
-	else if (sta->ptk_set)
-		decrypted = ccmp_decrypt(sta->ptk.tk1, hdr, data, len, &dlen);
-	else {
+	} else if (sta->ptk_set) {
+		if (sta->pairwise_cipher == WPA_CIPHER_CCMP_256)
+			decrypted = ccmp_256_decrypt(sta->ptk.tk, hdr, data,
+						     len, &dlen);
+		else if (sta->pairwise_cipher == WPA_CIPHER_GCMP ||
+			 sta->pairwise_cipher == WPA_CIPHER_GCMP_256)
+			decrypted = gcmp_decrypt(sta->ptk.tk, sta->tk_len,
+						 hdr, data, len, &dlen);
+		else
+			decrypted = ccmp_decrypt(sta->ptk.tk, hdr, data, len,
+						 &dlen);
+	} else {
 		decrypted = try_all_ptk(wt, sta->pairwise_cipher, hdr, data,
 					len, &dlen);
 		ptk_iter_done = 1;
@@ -434,6 +480,8 @@ static void rx_data_bss(struct wlantest *wt, const struct ieee80211_hdr *hdr,
 		rx_data_bss_prot(wt, hdr, qos, dst, src, data, len);
 	else {
 		const u8 *bssid, *sta_addr, *peer_addr;
+		struct wlantest_bss *bss;
+
 		if (fc & WLAN_FC_TODS) {
 			bssid = hdr->addr1;
 			sta_addr = hdr->addr2;
@@ -447,6 +495,27 @@ static void rx_data_bss(struct wlantest *wt, const struct ieee80211_hdr *hdr,
 			sta_addr = hdr->addr2;
 			peer_addr = hdr->addr1;
 		}
+
+		bss = bss_get(wt, bssid);
+		if (bss) {
+			struct wlantest_sta *sta = sta_get(bss, sta_addr);
+
+			if (sta) {
+				if (qos) {
+					int tid = qos[0] & 0x0f;
+					if (fc & WLAN_FC_TODS)
+						sta->tx_tid[tid]++;
+					else
+						sta->rx_tid[tid]++;
+				} else {
+					if (fc & WLAN_FC_TODS)
+						sta->tx_tid[16]++;
+					else
+						sta->rx_tid[16]++;
+				}
+			}
+		}
+
 		rx_data_process(wt, bssid, sta_addr, dst, src, data, len, 0,
 				peer_addr);
 	}

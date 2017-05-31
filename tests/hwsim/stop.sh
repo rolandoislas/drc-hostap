@@ -14,22 +14,23 @@ for i in `pidof valgrind.bin`; do
     fi
 done
 sudo killall -q wlantest
-sudo killall -q tcpdump
 if grep -q hwsim0 /proc/net/dev; then
     sudo ifconfig hwsim0 down
 fi
 
-killall -q hlr_auc_gw
+sudo killall -q hlr_auc_gw
 
 if [ "$RUNNING" = "yes" ]; then
     # give some time for hostapd and wpa_supplicant to complete deinit
-    sleep 0.5
-    for i in `seq 1 5`; do
-	if pidof wpa_supplicant hostapd valgrind.bin hlr_auc_gw > /dev/null; then
+    for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+	if ! pidof wpa_supplicant hostapd valgrind.bin hlr_auc_gw > /dev/null; then
+	    break
+	fi
+	if [ $i -gt 10 ]; then
 	    echo "Waiting for processes to exit (1)"
 	    sleep 1
 	else
-	    break
+	    sleep 0.06
 	fi
     done
 fi
@@ -38,7 +39,7 @@ if pidof wpa_supplicant hostapd hlr_auc_gw > /dev/null; then
     echo "wpa_supplicant/hostapd/hlr_auc_gw did not exit - try to force them to die"
     sudo killall -9 -q hostapd
     sudo killall -9 -q wpa_supplicant
-    killall -9 -q hlr_auc_gw
+    sudo killall -9 -q hlr_auc_gw
     for i in `seq 1 5`; do
 	if pidof wpa_supplicant hostapd hlr_auc_gw > /dev/null; then
 	    echo "Waiting for processes to exit (2)"
@@ -56,14 +57,16 @@ for i in `pidof valgrind.bin`; do
     fi
 done
 
-for i in /tmp/wpas-wlan0 /tmp/wpas-wlan1 /tmp/wpas-wlan2 /var/run/hostapd-global /tmp/hlr_auc_gw.sock /tmp/wpa_ctrl_* /tmp/eap_sim_db_*; do
-    if [ -e $i ]; then
+count=0
+for i in /tmp/wpas-wlan0 /tmp/wpas-wlan1 /tmp/wpas-wlan2 /tmp/wpas-wlan5 /var/run/hostapd-global /tmp/hlr_auc_gw.sock /tmp/wpa_ctrl_* /tmp/eap_sim_db_*; do
+    count=$(($count + 1))
+    if [ $count -lt 7 -a -e $i ]; then
 	echo "Waiting for ctrl_iface $i to disappear"
 	sleep 1
-	if [ -e $i ]; then
-	    echo "Control interface file $i exists - remove it"
-	    sudo rm $i
-	fi
+    fi
+    if [ -e $i ]; then
+	echo "Control interface file $i exists - remove it"
+	sudo rm $i
     fi
 done
 

@@ -185,10 +185,8 @@ static void wps_er_ap_unsubscribed(struct wps_er *er, struct wps_er_ap *ap)
 	dl_list_del(&ap->list);
 	wps_er_ap_free(ap);
 
-	if (er->deinitializing && dl_list_empty(&er->ap_unsubscribing)) {
-		eloop_cancel_timeout(wps_er_deinit_finish, er, NULL);
+	if (er->deinitializing && dl_list_empty(&er->ap_unsubscribing))
 		wps_er_deinit_finish(er, NULL);
-	}
 }
 
 
@@ -581,12 +579,15 @@ static void wps_er_parse_device_description(struct wps_er_ap *ap,
 	wpa_printf(MSG_DEBUG, "WPS ER: serialNumber='%s'", ap->serial_number);
 
 	ap->udn = xml_get_first_item(data, "UDN");
-	wpa_printf(MSG_DEBUG, "WPS ER: UDN='%s'", ap->udn);
-	pos = os_strstr(ap->udn, "uuid:");
-	if (pos) {
-		pos += 5;
-		if (uuid_str2bin(pos, ap->uuid) < 0)
-			wpa_printf(MSG_DEBUG, "WPS ER: Invalid UUID in UDN");
+	if (ap->udn) {
+		wpa_printf(MSG_DEBUG, "WPS ER: UDN='%s'", ap->udn);
+		pos = os_strstr(ap->udn, "uuid:");
+		if (pos) {
+			pos += 5;
+			if (uuid_str2bin(pos, ap->uuid) < 0)
+				wpa_printf(MSG_DEBUG,
+					   "WPS ER: Invalid UUID in UDN");
+		}
 	}
 
 	ap->upc = xml_get_first_item(data, "UPC");
@@ -1347,9 +1348,19 @@ static void wps_er_deinit_finish(void *eloop_data, void *user_ctx)
 	struct wps_er *er = eloop_data;
 	void (*deinit_done_cb)(void *ctx);
 	void *deinit_done_ctx;
+	struct wps_er_ap *ap, *tmp;
 
 	wpa_printf(MSG_DEBUG, "WPS ER: Finishing deinit");
 
+	dl_list_for_each_safe(ap, tmp, &er->ap_unsubscribing, struct wps_er_ap,
+			      list) {
+		wpa_printf(MSG_DEBUG, "WPS ER: AP entry for %s (%s) still in ap_unsubscribing list - free it",
+			   inet_ntoa(ap->addr), ap->location);
+		dl_list_del(&ap->list);
+		wps_er_ap_free(ap);
+	}
+
+	eloop_cancel_timeout(wps_er_deinit_finish, er, NULL);
 	deinit_done_cb = er->deinit_done_cb;
 	deinit_done_ctx = er->deinit_done_ctx;
 	os_free(er->ip_addr_text);
@@ -1482,11 +1493,9 @@ static int wps_er_build_sel_reg_config_methods(struct wpabuf *msg,
 
 static int wps_er_build_uuid_r(struct wpabuf *msg, const u8 *uuid_r)
 {
-#ifdef CONFIG_WPS2
 	wpabuf_put_be16(msg, ATTR_UUID_R);
 	wpabuf_put_be16(msg, WPS_UUID_LEN);
 	wpabuf_put_data(msg, uuid_r, WPS_UUID_LEN);
-#endif /* CONFIG_WPS2 */
 	return 0;
 }
 
@@ -1498,9 +1507,7 @@ void wps_er_set_sel_reg(struct wps_er *er, int sel_reg, u16 dev_passwd_id,
 	struct wps_er_ap *ap;
 	struct wps_registrar *reg = er->wps->registrar;
 	const u8 *auth_macs;
-#ifdef CONFIG_WPS2
 	u8 bcast[ETH_ALEN];
-#endif /* CONFIG_WPS2 */
 	size_t count;
 	union wps_event_data data;
 
@@ -1514,13 +1521,11 @@ void wps_er_set_sel_reg(struct wps_er *er, int sel_reg, u16 dev_passwd_id,
 		return;
 
 	auth_macs = wps_authorized_macs(reg, &count);
-#ifdef CONFIG_WPS2
 	if (count == 0) {
 		os_memset(bcast, 0xff, ETH_ALEN);
 		auth_macs = bcast;
 		count = 1;
 	}
-#endif /* CONFIG_WPS2 */
 
 	if (wps_build_version(msg) ||
 	    wps_er_build_selected_registrar(msg, sel_reg) ||
@@ -1644,11 +1649,15 @@ static void wps_er_http_put_message_cb(void *ctx, struct http_client *c,
 	case HTTP_CLIENT_OK:
 		wpa_printf(MSG_DEBUG, "WPS ER: PutMessage OK");
 		reply = http_client_get_body(c);
-		if (reply == NULL)
+		if (reply)
+			msg = os_zalloc(wpabuf_len(reply) + 1);
+		if (msg == NULL) {
+			if (ap->wps) {
+				wps_deinit(ap->wps);
+				ap->wps = NULL;
+			}
 			break;
-		msg = os_zalloc(wpabuf_len(reply) + 1);
-		if (msg == NULL)
-			break;
+		}
 		os_memcpy(msg, wpabuf_head(reply), wpabuf_len(reply));
 		break;
 	case HTTP_CLIENT_FAILED:
@@ -1704,21 +1713,30 @@ static void wps_er_ap_put_message(struct wps_er_ap *ap,
 	url = http_client_url_parse(ap->control_url, &dst, &path);
 	if (url == NULL) {
 		wpa_printf(MSG_DEBUG, "WPS ER: Failed to parse controlURL");
-		return;
+		goto fail;
 	}
 
 	buf = wps_er_soap_hdr(msg, "PutMessage", "NewInMessage", path, &dst,
 			      &len_ptr, &body_ptr);
 	os_free(url);
 	if (buf == NULL)
-		return;
+		goto fail;
 
 	wps_er_soap_end(buf, "PutMessage", len_ptr, body_ptr);
 
 	ap->http = http_client_addr(&dst, buf, 10000,
 				    wps_er_http_put_message_cb, ap);
-	if (ap->http == NULL)
+	if (ap->http == NULL) {
 		wpabuf_free(buf);
+		goto fail;
+	}
+	return;
+
+fail:
+	if (ap->wps) {
+		wps_deinit(ap->wps);
+		ap->wps = NULL;
+	}
 }
 
 
@@ -2032,8 +2050,7 @@ struct wpabuf * wps_er_config_token_from_cred(struct wps_context *wps,
 	os_memset(&data, 0, sizeof(data));
 	data.wps = wps;
 	data.use_cred = cred;
-	if (wps_build_version(ret) ||
-	    wps_build_cred(&data, ret) ||
+	if (wps_build_cred(&data, ret) ||
 	    wps_build_wfa_ext(ret, 0, NULL, 0)) {
 		wpabuf_free(ret);
 		return NULL;
@@ -2061,6 +2078,31 @@ struct wpabuf * wps_er_nfc_config_token(struct wps_er *er, const u8 *uuid,
 	}
 
 	return wps_er_config_token_from_cred(er->wps, ap->ap_settings);
+}
+
+
+struct wpabuf * wps_er_nfc_handover_sel(struct wps_er *er,
+					struct wps_context *wps, const u8 *uuid,
+					const u8 *addr, struct wpabuf *pubkey)
+{
+	struct wps_er_ap *ap;
+
+	if (er == NULL)
+		return NULL;
+
+	ap = wps_er_ap_get(er, NULL, uuid, addr);
+	if (ap == NULL)
+		return NULL;
+	if (ap->ap_settings == NULL) {
+		wpa_printf(MSG_DEBUG, "WPS ER: No settings known for the "
+			   "selected AP");
+		return NULL;
+	}
+
+	os_memcpy(wps->ssid, ap->ap_settings->ssid, ap->ap_settings->ssid_len);
+	wps->ssid_len = ap->ap_settings->ssid_len;
+
+	return wps_build_nfc_handover_sel(wps, pubkey, addr, 0);
 }
 
 #endif /* CONFIG_WPS_NFC */

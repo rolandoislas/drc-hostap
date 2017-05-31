@@ -19,6 +19,8 @@ CFLAGS += -I.
 CFLAGS += -I../src
 CFLAGS += -I../src/utils
 
+# glibc < 2.17 needs -lrt for clock_gettime()
+LIBS += -lrt
 
 ifndef LDO
 LDO=$(CC)
@@ -28,6 +30,10 @@ Q=@
 E=echo
 ifeq ($(V), 1)
 Q=
+E=true
+endif
+ifeq ($(QUIET), 1)
+Q=@
 E=true
 endif
 
@@ -42,6 +48,7 @@ OBJS_lib += ../src/crypto/libcrypto.a
 CFLAGS += -DCONFIG_PEERKEY
 CFLAGS += -DCONFIG_IEEE80211W
 CFLAGS += -DCONFIG_IEEE80211R
+CFLAGS += -DCONFIG_HS20
 CFLAGS += -DCONFIG_DEBUG_FILE
 
 OBJS += ../src/common/ieee802_11_common.o
@@ -69,6 +76,7 @@ OBJS += ctrl.o
 OBJS += inject.o
 OBJS += wep.o
 OBJS += bip.o
+OBJS += gcmp.o
 
 LIBS += -lpcap
 
@@ -112,7 +120,7 @@ wlantest: $(OBJS) $(LIBWLANTEST)
 	$(LDO) $(LDFLAGS) -o wlantest $(OBJS) -L. -lwlantest $(LIBS)
 
 wlantest_cli: $(OBJS_cli) $(LIBWLANTEST)
-	$(LDO) $(LDFLAGS) -o wlantest_cli $(OBJS_cli) -L. -lwlantest
+	$(LDO) $(LDFLAGS) -o wlantest_cli $(OBJS_cli) -L. -lwlantest $(LIBS)
 
 test_vectors: $(TOBJS) $(LIBWLANTEST)
 	$(LDO) $(LDFLAGS) -o test_vectors $(TOBJS) -L. -lwlantest $(LIBS)

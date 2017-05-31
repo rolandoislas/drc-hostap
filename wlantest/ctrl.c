@@ -1,6 +1,6 @@
 /*
  * wlantest control interface
- * Copyright (c) 2010-2013, Jouni Malinen <j@w1.fi>
+ * Copyright (c) 2010-2015, Jouni Malinen <j@w1.fi>
  *
  * This software may be distributed under the terms of the BSD license.
  * See README for more details.
@@ -290,6 +290,8 @@ static void ctrl_clear_sta_counters(struct wlantest *wt, int sock, u8 *cmd,
 	}
 
 	os_memset(sta->counters, 0, sizeof(sta->counters));
+	os_memset(sta->tx_tid, 0, sizeof(sta->tx_tid));
+	os_memset(sta->rx_tid, 0, sizeof(sta->rx_tid));
 	ctrl_send_simple(wt, sock, WLANTEST_CTRL_SUCCESS);
 }
 
@@ -904,6 +906,15 @@ static void info_print_cipher(char *buf, size_t len, int cipher)
 	if (cipher & WPA_CIPHER_AES_128_CMAC)
 		pos += os_snprintf(pos, end - pos, "%sBIP",
 				   pos == buf ? "" : " ");
+	if (cipher & WPA_CIPHER_BIP_GMAC_128)
+		pos += os_snprintf(pos, end - pos, "%sBIP-GMAC-128",
+				   pos == buf ? "" : " ");
+	if (cipher & WPA_CIPHER_BIP_GMAC_256)
+		pos += os_snprintf(pos, end - pos, "%sBIP-GMAC-256",
+				   pos == buf ? "" : " ");
+	if (cipher & WPA_CIPHER_BIP_CMAC_256)
+		pos += os_snprintf(pos, end - pos, "%sBIP-CMAC-256",
+				   pos == buf ? "" : " ");
 }
 
 
@@ -939,6 +950,12 @@ static void info_print_key_mgmt(char *buf, size_t len, int key_mgmt)
 				   pos == buf ? "" : " ");
 	if (key_mgmt & WPA_KEY_MGMT_PSK_SHA256)
 		pos += os_snprintf(pos, end - pos, "%sPSK-SHA256",
+				   pos == buf ? "" : " ");
+	if (key_mgmt & WPA_KEY_MGMT_IEEE8021X_SUITE_B)
+		pos += os_snprintf(pos, end - pos, "%sEAP-SUITE-B",
+				   pos == buf ? "" : " ");
+	if (key_mgmt & WPA_KEY_MGMT_IEEE8021X_SUITE_B_192)
+		pos += os_snprintf(pos, end - pos, "%sEAP-SUITE-B-192",
 				   pos == buf ? "" : " ");
 }
 
@@ -1195,6 +1212,76 @@ static void ctrl_relog(struct wlantest *wt, int sock)
 }
 
 
+static void ctrl_get_tx_tid(struct wlantest *wt, int sock, u8 *cmd, size_t clen)
+{
+	u8 *addr;
+	size_t addr_len;
+	struct wlantest_bss *bss;
+	struct wlantest_sta *sta;
+	u32 counter;
+	u8 buf[4 + 12], *end, *pos;
+
+	bss = ctrl_get_bss(wt, sock, cmd, clen);
+	sta = ctrl_get_sta(wt, sock, cmd, clen, bss);
+	if (sta == NULL)
+		return;
+
+	addr = attr_get(cmd, clen, WLANTEST_ATTR_TID, &addr_len);
+	if (addr == NULL || addr_len != 4) {
+		ctrl_send_simple(wt, sock, WLANTEST_CTRL_INVALID_CMD);
+		return;
+	}
+	counter = WPA_GET_BE32(addr);
+	if (counter >= 16 + 1) {
+		ctrl_send_simple(wt, sock, WLANTEST_CTRL_INVALID_CMD);
+		return;
+	}
+
+	pos = buf;
+	end = buf + sizeof(buf);
+	WPA_PUT_BE32(pos, WLANTEST_CTRL_SUCCESS);
+	pos += 4;
+	pos = attr_add_be32(pos, end, WLANTEST_ATTR_COUNTER,
+			    sta->tx_tid[counter]);
+	ctrl_send(wt, sock, buf, pos - buf);
+}
+
+
+static void ctrl_get_rx_tid(struct wlantest *wt, int sock, u8 *cmd, size_t clen)
+{
+	u8 *addr;
+	size_t addr_len;
+	struct wlantest_bss *bss;
+	struct wlantest_sta *sta;
+	u32 counter;
+	u8 buf[4 + 12], *end, *pos;
+
+	bss = ctrl_get_bss(wt, sock, cmd, clen);
+	sta = ctrl_get_sta(wt, sock, cmd, clen, bss);
+	if (sta == NULL)
+		return;
+
+	addr = attr_get(cmd, clen, WLANTEST_ATTR_TID, &addr_len);
+	if (addr == NULL || addr_len != 4) {
+		ctrl_send_simple(wt, sock, WLANTEST_CTRL_INVALID_CMD);
+		return;
+	}
+	counter = WPA_GET_BE32(addr);
+	if (counter >= 16 + 1) {
+		ctrl_send_simple(wt, sock, WLANTEST_CTRL_INVALID_CMD);
+		return;
+	}
+
+	pos = buf;
+	end = buf + sizeof(buf);
+	WPA_PUT_BE32(pos, WLANTEST_CTRL_SUCCESS);
+	pos += 4;
+	pos = attr_add_be32(pos, end, WLANTEST_ATTR_COUNTER,
+			    sta->rx_tid[counter]);
+	ctrl_send(wt, sock, buf, pos - buf);
+}
+
+
 static void ctrl_read(int sock, void *eloop_ctx, void *sock_ctx)
 {
 	struct wlantest *wt = eloop_ctx;
@@ -1280,6 +1367,12 @@ static void ctrl_read(int sock, void *eloop_ctx, void *sock_ctx)
 		break;
 	case WLANTEST_CTRL_RELOG:
 		ctrl_relog(wt, sock);
+		break;
+	case WLANTEST_CTRL_GET_TX_TID:
+		ctrl_get_tx_tid(wt, sock, buf + 4, len - 4);
+		break;
+	case WLANTEST_CTRL_GET_RX_TID:
+		ctrl_get_rx_tid(wt, sock, buf + 4, len - 4);
 		break;
 	default:
 		ctrl_send_simple(wt, sock, WLANTEST_CTRL_UNKNOWN_CMD);

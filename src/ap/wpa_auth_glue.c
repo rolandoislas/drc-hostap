@@ -11,11 +11,12 @@
 #include "utils/common.h"
 #include "common/ieee802_11_defs.h"
 #include "common/sae.h"
+#include "common/wpa_ctrl.h"
+#include "crypto/sha1.h"
 #include "eapol_auth/eapol_auth_sm.h"
 #include "eapol_auth/eapol_auth_sm_i.h"
 #include "eap_server/eap.h"
 #include "l2_packet/l2_packet.h"
-#include "drivers/driver.h"
 #include "hostapd.h"
 #include "ieee802_1x.h"
 #include "preauth_auth.h"
@@ -50,11 +51,12 @@ static void hostapd_wpa_auth_conf(struct hostapd_bss_config *conf,
 	wconf->okc = conf->okc;
 #ifdef CONFIG_IEEE80211W
 	wconf->ieee80211w = conf->ieee80211w;
+	wconf->group_mgmt_cipher = conf->group_mgmt_cipher;
 #endif /* CONFIG_IEEE80211W */
 #ifdef CONFIG_IEEE80211R
 	wconf->ssid_len = conf->ssid.ssid_len;
-	if (wconf->ssid_len > SSID_LEN)
-		wconf->ssid_len = SSID_LEN;
+	if (wconf->ssid_len > SSID_MAX_LEN)
+		wconf->ssid_len = SSID_MAX_LEN;
 	os_memcpy(wconf->ssid, conf->ssid.ssid, wconf->ssid_len);
 	os_memcpy(wconf->mobility_domain, conf->mobility_domain,
 		  MOBILITY_DOMAIN_ID_LEN);
@@ -74,11 +76,37 @@ static void hostapd_wpa_auth_conf(struct hostapd_bss_config *conf,
 #endif /* CONFIG_IEEE80211R */
 #ifdef CONFIG_HS20
 	wconf->disable_gtk = conf->disable_dgaf;
+	if (conf->osen) {
+		wconf->disable_gtk = 1;
+		wconf->wpa = WPA_PROTO_OSEN;
+		wconf->wpa_key_mgmt = WPA_KEY_MGMT_OSEN;
+		wconf->wpa_pairwise = 0;
+		wconf->wpa_group = WPA_CIPHER_CCMP;
+		wconf->rsn_pairwise = WPA_CIPHER_CCMP;
+		wconf->rsn_preauth = 0;
+		wconf->disable_pmksa_caching = 1;
+#ifdef CONFIG_IEEE80211W
+		wconf->ieee80211w = 1;
+#endif /* CONFIG_IEEE80211W */
+	}
 #endif /* CONFIG_HS20 */
 #ifdef CONFIG_TESTING_OPTIONS
 	wconf->corrupt_gtk_rekey_mic_probability =
 		iconf->corrupt_gtk_rekey_mic_probability;
+	if (conf->own_ie_override &&
+	    wpabuf_len(conf->own_ie_override) <= MAX_OWN_IE_OVERRIDE) {
+		wconf->own_ie_override_len = wpabuf_len(conf->own_ie_override);
+		os_memcpy(wconf->own_ie_override,
+			  wpabuf_head(conf->own_ie_override),
+			  wconf->own_ie_override_len);
+	}
 #endif /* CONFIG_TESTING_OPTIONS */
+#ifdef CONFIG_P2P
+	os_memcpy(wconf->ip_addr_go, conf->ip_addr_go, 4);
+	os_memcpy(wconf->ip_addr_mask, conf->ip_addr_mask, 4);
+	os_memcpy(wconf->ip_addr_start, conf->ip_addr_start, 4);
+	os_memcpy(wconf->ip_addr_end, conf->ip_addr_end, 4);
+#endif /* CONFIG_P2P */
 }
 
 
@@ -122,6 +150,14 @@ static int hostapd_wpa_auth_mic_failure_report(void *ctx, const u8 *addr)
 {
 	struct hostapd_data *hapd = ctx;
 	return michael_mic_failure(hapd, addr, 0);
+}
+
+
+static void hostapd_wpa_auth_psk_failure_report(void *ctx, const u8 *addr)
+{
+	struct hostapd_data *hapd = ctx;
+	wpa_msg(hapd->msg_ctx, MSG_INFO, AP_STA_POSSIBLE_PSK_MISMATCH MACSTR,
+		MAC2STR(addr));
 }
 
 
@@ -211,6 +247,13 @@ static const u8 * hostapd_wpa_auth_get_psk(void *ctx, const u8 *addr,
 		struct hostapd_sta_wpa_psk_short *pos;
 		psk = sta->psk->psk;
 		for (pos = sta->psk; pos; pos = pos->next) {
+			if (pos->is_passphrase) {
+				pbkdf2_sha1(pos->passphrase,
+					    hapd->conf->ssid.ssid,
+					    hapd->conf->ssid.ssid_len, 4096,
+					    pos->psk, PMK_LEN);
+				pos->is_passphrase = 0;
+			}
 			if (pos->psk == prev_psk) {
 				psk = pos->next ? pos->next->psk : NULL;
 				break;
@@ -230,12 +273,17 @@ static int hostapd_wpa_auth_get_msk(void *ctx, const u8 *addr, u8 *msk,
 	struct sta_info *sta;
 
 	sta = ap_get_sta(hapd, addr);
-	if (sta == NULL)
+	if (sta == NULL) {
+		wpa_printf(MSG_DEBUG, "AUTH_GET_MSK: Cannot find STA");
 		return -1;
+	}
 
 	key = ieee802_1x_get_key(sta->eapol_sm, &keylen);
-	if (key == NULL)
+	if (key == NULL) {
+		wpa_printf(MSG_DEBUG, "AUTH_GET_MSK: Key is null, eapol_sm: %p",
+			   sta->eapol_sm);
 		return -1;
+	}
 
 	if (keylen > *len)
 		keylen = *len;
@@ -279,6 +327,21 @@ static int hostapd_wpa_auth_send_eapol(void *ctx, const u8 *addr,
 	struct hostapd_data *hapd = ctx;
 	struct sta_info *sta;
 	u32 flags = 0;
+
+#ifdef CONFIG_TESTING_OPTIONS
+	if (hapd->ext_eapol_frame_io) {
+		size_t hex_len = 2 * data_len + 1;
+		char *hex = os_malloc(hex_len);
+
+		if (hex == NULL)
+			return -1;
+		wpa_snprintf_hex(hex, hex_len, data, data_len);
+		wpa_msg(hapd->msg_ctx, MSG_INFO, "EAPOL-TX " MACSTR " %s",
+			MAC2STR(addr), hex);
+		os_free(hex);
+		return 0;
+	}
+#endif /* CONFIG_TESTING_OPTIONS */
 
 	sta = ap_get_sta(hapd, addr);
 	if (sta)
@@ -358,6 +421,8 @@ static int hostapd_wpa_auth_ft_iter(struct hostapd_iface *iface, void *ctx)
 		hapd = iface->bss[j];
 		if (hapd == idata->src_hapd)
 			continue;
+		if (!hapd->wpa_auth)
+			continue;
 		if (os_memcmp(hapd->own_addr, idata->dst, ETH_ALEN) == 0) {
 			wpa_printf(MSG_DEBUG, "FT: Send RRB data directly to "
 				   "locally managed BSS " MACSTR "@%s -> "
@@ -384,6 +449,21 @@ static int hostapd_wpa_auth_send_ether(void *ctx, const u8 *dst, u16 proto,
 	struct hostapd_data *hapd = ctx;
 	struct l2_ethhdr *buf;
 	int ret;
+
+#ifdef CONFIG_TESTING_OPTIONS
+	if (hapd->ext_eapol_frame_io && proto == ETH_P_EAPOL) {
+		size_t hex_len = 2 * data_len + 1;
+		char *hex = os_malloc(hex_len);
+
+		if (hex == NULL)
+			return -1;
+		wpa_snprintf_hex(hex, hex_len, data, data_len);
+		wpa_msg(hapd->msg_ctx, MSG_INFO, "EAPOL-TX " MACSTR " %s",
+			MAC2STR(dst), hex);
+		os_free(hex);
+		return 0;
+	}
+#endif /* CONFIG_TESTING_OPTIONS */
 
 #ifdef CONFIG_IEEE80211R
 	if (proto == ETH_P_RRB && hapd->iface->interfaces &&
@@ -493,6 +573,9 @@ static void hostapd_rrb_receive(void *ctx, const u8 *src_addr, const u8 *buf,
 	ethhdr = (struct l2_ethhdr *) buf;
 	wpa_printf(MSG_DEBUG, "FT: RRB received packet " MACSTR " -> "
 		   MACSTR, MAC2STR(ethhdr->h_source), MAC2STR(ethhdr->h_dest));
+	if (!is_multicast_ether_addr(ethhdr->h_dest) &&
+	    os_memcmp(hapd->own_addr, ethhdr->h_dest, ETH_ALEN) != 0)
+		return;
 	wpa_ft_rrb_rx(hapd->wpa_auth, ethhdr->h_source, buf + sizeof(*ethhdr),
 		      len - sizeof(*ethhdr));
 }
@@ -525,6 +608,7 @@ int hostapd_setup_wpa(struct hostapd_data *hapd)
 	cb.logger = hostapd_wpa_auth_logger;
 	cb.disconnect = hostapd_wpa_auth_disconnect;
 	cb.mic_failure_report = hostapd_wpa_auth_mic_failure_report;
+	cb.psk_failure_report = hostapd_wpa_auth_psk_failure_report;
 	cb.set_eapol = hostapd_wpa_auth_set_eapol;
 	cb.get_eapol = hostapd_wpa_auth_get_eapol;
 	cb.get_psk = hostapd_wpa_auth_get_psk;
@@ -566,7 +650,8 @@ int hostapd_setup_wpa(struct hostapd_data *hapd)
 	}
 
 #ifdef CONFIG_IEEE80211R
-	if (!hostapd_drv_none(hapd)) {
+	if (!hostapd_drv_none(hapd) &&
+	    wpa_key_mgmt_ft(hapd->conf->wpa_key_mgmt)) {
 		hapd->l2 = l2_packet_init(hapd->conf->bridge[0] ?
 					  hapd->conf->bridge :
 					  hapd->conf->iface, NULL, ETH_P_RRB,
@@ -602,13 +687,14 @@ void hostapd_deinit_wpa(struct hostapd_data *hapd)
 		wpa_deinit(hapd->wpa_auth);
 		hapd->wpa_auth = NULL;
 
-		if (hostapd_set_privacy(hapd, 0)) {
+		if (hapd->drv_priv && hostapd_set_privacy(hapd, 0)) {
 			wpa_printf(MSG_DEBUG, "Could not disable "
 				   "PrivacyInvoked for interface %s",
 				   hapd->conf->iface);
 		}
 
-		if (hostapd_set_generic_elem(hapd, (u8 *) "", 0)) {
+		if (hapd->drv_priv &&
+		    hostapd_set_generic_elem(hapd, (u8 *) "", 0)) {
 			wpa_printf(MSG_DEBUG, "Could not remove generic "
 				   "information element from interface %s",
 				   hapd->conf->iface);

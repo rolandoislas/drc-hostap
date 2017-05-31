@@ -40,7 +40,7 @@ struct ibss_rsn_peer {
 	struct wpa_state_machine *auth;
 	int authentication_status;
 
-	struct os_time own_auth_tx;
+	struct os_reltime own_auth_tx;
 };
 
 struct ibss_rsn {
@@ -51,7 +51,8 @@ struct ibss_rsn {
 };
 
 
-struct ibss_rsn * ibss_rsn_init(struct wpa_supplicant *wpa_s);
+struct ibss_rsn * ibss_rsn_init(struct wpa_supplicant *wpa_s,
+				struct wpa_ssid *ssid);
 void ibss_rsn_deinit(struct ibss_rsn *ibss_rsn);
 int ibss_rsn_start(struct ibss_rsn *ibss_rsn, const u8 *addr);
 void ibss_rsn_stop(struct ibss_rsn *ibss_rsn, const u8 *peermac);

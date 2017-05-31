@@ -13,8 +13,6 @@
 #include "radius/radius.h"
 #include "radius/radius_client.h"
 
-extern int wpa_debug_level;
-
 struct radius_ctx {
 	struct radius_client_data *radius;
 	struct hostapd_radius_servers conf;
@@ -63,7 +61,7 @@ static void start_example(void *eloop_ctx, void *timeout_ctx)
 		return;
 	}
 
-	radius_msg_make_authenticator(msg, (u8 *) ctx, sizeof(*ctx));
+	radius_msg_make_authenticator(msg);
 
 	if (!radius_msg_add_attr(msg, RADIUS_ATTR_USER_NAME,
 				 (u8 *) "user", 4)) {

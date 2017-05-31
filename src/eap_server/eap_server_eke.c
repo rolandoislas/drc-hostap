@@ -104,7 +104,7 @@ static void eap_eke_reset(struct eap_sm *sm, void *priv)
 	eap_eke_session_clean(&data->sess);
 	os_free(data->peerid);
 	wpabuf_free(data->msgs);
-	os_free(data);
+	bin_clear_free(data, sizeof(*data));
 }
 
 
@@ -635,8 +635,8 @@ static void eap_eke_process_confirm(struct eap_sm *sm,
 		return;
 	}
 	wpa_hexdump(MSG_DEBUG, "EAP-EKE: Auth_P", auth_p, data->sess.prf_len);
-	if (os_memcmp(auth_p, payload + data->sess.pnonce_len,
-		      data->sess.prf_len) != 0) {
+	if (os_memcmp_const(auth_p, payload + data->sess.pnonce_len,
+			    data->sess.prf_len) != 0) {
 		wpa_printf(MSG_INFO, "EAP-EKE: Auth_P does not match");
 		eap_eke_fail(data, EAP_EKE_FAIL_AUTHENTICATION_FAIL);
 		return;
@@ -766,10 +766,32 @@ static Boolean eap_eke_isSuccess(struct eap_sm *sm, void *priv)
 }
 
 
+static u8 * eap_eke_get_session_id(struct eap_sm *sm, void *priv, size_t *len)
+{
+	struct eap_eke_data *data = priv;
+	u8 *sid;
+	size_t sid_len;
+
+	if (data->state != SUCCESS)
+		return NULL;
+
+	sid_len = 1 + 2 * data->sess.nonce_len;
+	sid = os_malloc(sid_len);
+	if (sid == NULL)
+		return NULL;
+	sid[0] = EAP_TYPE_EKE;
+	os_memcpy(sid + 1, data->nonce_p, data->sess.nonce_len);
+	os_memcpy(sid + 1 + data->sess.nonce_len, data->nonce_s,
+		  data->sess.nonce_len);
+	*len = sid_len;
+
+	return sid;
+}
+
+
 int eap_server_eke_register(void)
 {
 	struct eap_method *eap;
-	int ret;
 
 	eap = eap_server_method_alloc(EAP_SERVER_METHOD_INTERFACE_VERSION,
 				      EAP_VENDOR_IETF, EAP_TYPE_EKE, "EKE");
@@ -785,9 +807,7 @@ int eap_server_eke_register(void)
 	eap->getKey = eap_eke_getKey;
 	eap->isSuccess = eap_eke_isSuccess;
 	eap->get_emsk = eap_eke_get_emsk;
+	eap->getSessionId = eap_eke_get_session_id;
 
-	ret = eap_server_method_register(eap);
-	if (ret)
-		eap_server_method_free(eap);
-	return ret;
+	return eap_server_method_register(eap);
 }

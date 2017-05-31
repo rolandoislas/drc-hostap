@@ -12,6 +12,7 @@
 #include "utils/radiotap.h"
 #include "utils/radiotap_iter.h"
 #include "common/ieee802_11_defs.h"
+#include "common/qca-vendor.h"
 #include "wlantest.h"
 
 
@@ -276,7 +277,7 @@ void wlantest_process(struct wlantest *wt, const u8 *data, size_t len)
 
 	wpa_hexdump(MSG_EXCESSIVE, "Process data", data, len);
 
-	if (ieee80211_radiotap_iterator_init(&iter, (void *) data, len)) {
+	if (ieee80211_radiotap_iterator_init(&iter, (void *) data, len, NULL)) {
 		add_note(wt, MSG_INFO, "Invalid radiotap frame");
 		return;
 	}
@@ -305,16 +306,18 @@ void wlantest_process(struct wlantest *wt, const u8 *data, size_t len)
 			failed = le_to_host16((*(u16 *) iter.this_arg)) &
 				IEEE80211_RADIOTAP_F_TX_FAIL;
 			break;
-
+		case IEEE80211_RADIOTAP_VENDOR_NAMESPACE:
+			if (WPA_GET_BE24(iter.this_arg) == OUI_QCA &&
+			    iter.this_arg[3] == QCA_RADIOTAP_VID_WLANTEST) {
+				add_note(wt, MSG_DEBUG,
+					 "Skip frame inserted by wlantest");
+				return;
+			}
 		}
 	}
 
-	if (iter.max_length == 8) {
-		add_note(wt, MSG_DEBUG, "Skip frame inserted by wlantest");
-		return;
-	}
-	frame = data + iter.max_length;
-	frame_len = len - iter.max_length;
+	frame = data + iter._max_length;
+	frame_len = len - iter._max_length;
 
 	if (fcs && frame_len >= 4) {
 		frame_len -= 4;
